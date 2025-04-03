@@ -1,0 +1,29 @@
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: strip-sumplete-prefix
+  namespace: default
+spec:
+  stripPrefix:
+    prefixes:
+      - "/sumplete"
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: strip-tictactoe-prefix
+  namespace: default
+spec:
+  stripPrefix:
+    prefixes:
+      - "/tic-tac-toe"
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: strip-chess-prefix
+  namespace: default
+spec:
+  stripPrefix:
+    prefixes:
+      - "/chess"

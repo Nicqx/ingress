@@ -1,0 +1,26 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-tictactoe
+  namespace: default
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # Töröld vagy kommenteld ki ezt az annotációt, hogy ne legyen prefix eltávolítás
+    # traefik.ingress.kubernetes.io/router.middlewares: strip-tictactoe-prefix@kubernetescrd
+spec:
+  tls:
+  - hosts:
+      - "pmqxyz.hopto.org"
+    secretName: my-tls-secret
+  rules:
+  - host: "pmqxyz.hopto.org"
+    http:
+      paths:
+      - path: /tic-tac-toe/
+        pathType: Prefix
+        backend:
+          service:
+            name: ultimate-tic-tac-toe-service
+            port:
+              number: 8090
+

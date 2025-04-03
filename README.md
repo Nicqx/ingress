@@ -7,6 +7,8 @@ kubectl apply -f clusterissuer.yaml
 kubectl get clusterissuer letsencrypt-prod
 kubectl describe clusterissuer letsencrypt-prod
 
+kubectl apply -f middlewares.yaml
+
 kubectl apply -f my-ingress.yaml
 
 kubectl get ingress -A | grep acme
