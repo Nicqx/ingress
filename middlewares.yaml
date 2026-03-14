@@ -27,3 +27,13 @@ spec:
   stripPrefix:
     prefixes:
       - "/chess"
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: strip-sudoku-prefix
+  namespace: default
+spec:
+  stripPrefix:
+    prefixes:
+      - "/sudoku"
