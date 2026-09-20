@@ -14,7 +14,7 @@ Egyetlen kezelt útvonal tartozik minden játékhoz, a Pi jelenlegi erőforrásn
 
 Minden útvonal `Prefix`. Csak a Sudoku igényel prefixlevágást. A többi alkalmazás maga kezeli a saját prefixét, így a WebSocket/Socket.IO útvonalak is megmaradnak.
 
-A Middleware API-t a clusterből fedezzük fel: elsődlegesen `traefik.io/v1alpha1`, régi Pi-telepítéshez a ténylegesen kiszolgált `traefik.containo.us/v1alpha1` is kezelhető. Új NUC-ingressek csak a `websecure` entrypointra kerülnek TLS-szel. A meglévő Pi-ingressek globális entrypoint/middleware beállítását megőrizzük; **általános HTTP→HTTPS redirectet ez az update nem kapcsol be**. A 80-as port a cert-manager HTTP-01 ellenőrzéséhez szükséges.
+A Middleware API-t a clusterből fedezzük fel: elsődlegesen `traefik.io/v1alpha1`, régi Pi-telepítéshez a ténylegesen kiszolgált `traefik.containo.us/v1alpha1` is kezelhető. Az alkalmazás-ingressek a `websecure` entrypointra kerülnek TLS-szel. A külön `nicqx-http-redirect` ingress a `web` entrypointról állandó HTTPS-átirányítást végez. A cert-manager pontosabb HTTP-01 solver útvonala elsőbbséget kap a gyökérútvonalnál, ezért a tanúsítvány megújítása továbbra is működik.
 
 ## Közös használat
 
