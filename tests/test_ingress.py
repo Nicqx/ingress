@@ -57,6 +57,20 @@ class RouteTests(unittest.TestCase):
         self.assertFalse(any(i['kind'] == 'Middleware' for i in result))
         self.assertEqual(next(i for i in result if i['metadata']['name'] == manage.SUDOKU)['metadata']['annotations'][manage.MIDDLEWARE_ANNOTATION], ref)
 
+    def test_duplicate_compatible_sudoku_middlewares_are_reduced_to_existing_one(self):
+        old = self.initial(); sudoku = next(i for i in old if i['metadata']['name'] == manage.SUDOKU)
+        original = 'default-strip-sudoku-prefix@kubernetescrd'
+        generated = 'default-' + manage.STRIP + '@kubernetescrd'
+        sudoku['metadata']['annotations'][manage.MIDDLEWARE_ANNOTATION] = original + ',' + generated
+        middleware_objects = {
+            original: {'spec': {'stripPrefix': {'prefixes': ['/sudoku']}}},
+            generated: {'spec': {'stripPrefix': {'prefixes': ['/sudoku']}}},
+        }
+        result = manage.render(CONFIG, old, 'traefik.io', middleware_objects)
+        updated = next(i for i in result if i['metadata']['name'] == manage.SUDOKU)
+        self.assertEqual(updated['metadata']['annotations'][manage.MIDDLEWARE_ANNOTATION], original)
+        self.assertFalse(any(i['kind'] == 'Middleware' for i in result))
+
     def test_new_and_old_traefik_crd_discovery(self):
         for group in ['traefik.io', 'traefik.containo.us']:
             kube = Mock(); kube.get.return_value = {'items': [{'metadata': {'name': 'middlewares.'+group},
