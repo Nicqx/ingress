@@ -102,3 +102,29 @@ A részletes, a jelenlegi leltárra szabott sorrend a [MIGRATION.md](MIGRATION.m
 Teszt: `python3 -m unittest discover -s tests -v`. A tesztek ellenőrzik az útvonaltulajdonlást, a védett route megőrzését, a régi/új CRD-t és valódi OpenSSL-lel a tanúsítvány hostname/kulcs-ellenőrzését.
 
 Hivatalos források: [K3s hálózati szolgáltatások](https://docs.k3s.io/networking/networking-services), [cert-manager támogatott kiadások](https://cert-manager.io/docs/releases/), [cert-manager telepítés](https://cert-manager.io/docs/installation/kubectl/).
+
+## Leállítás és eltávolítás
+
+Az ingress állapotmentes, de a TLS Secret és a cert-manager erőforrások értékesek. Migrációnál a `MIGRATION.md` TLS-export/import sorrendjét használd; a routeren csak TCP 80 és 443 maradjon a NUC NodePortjaira.
+
+Csak a repo által kezelt útvonalak eltávolítása, a TLS és cert-manager megtartásával:
+
+```bash
+sudo k3s kubectl delete ingress \
+  home-games-ingress home-games-sudoku-ingress \
+  bakos-game-ingress maffia-game-ingress nicqx-http-redirect \
+  -n default
+sudo k3s kubectl delete middleware \
+  nicqx-strip-sudoku-prefix nicqx-redirect-https \
+  -n default
+```
+
+Teljes TLS-eltávolítás csak akkor indokolt, ha a hostot többé nem ezen a clusteren szolgálod ki:
+
+```bash
+sudo k3s kubectl delete certificate/my-tls-secret -n default
+sudo k3s kubectl delete clusterissuer/letsencrypt-prod
+sudo k3s kubectl delete secret/my-tls-secret -n default
+```
+
+A cert-manager teljes eltávolítása külön művelet; más Certificate-ek meglétét előbb ellenőrizd. A Traefik a k3s része, ezt a repo nem távolítja el.
