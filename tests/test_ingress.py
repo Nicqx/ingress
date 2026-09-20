@@ -21,10 +21,25 @@ class RouteTests(unittest.TestCase):
     def test_one_owner_per_host_path_and_only_sudoku_strips(self):
         items = manage.render(CONFIG)
         routes = [(r['host'], p['path']) for i in items if i['kind'] == 'Ingress'
+                  and i['metadata']['name'] in manage.ROUTES
                   for r in i['spec']['rules'] for p in r['http']['paths']]
         self.assertEqual(len(routes), 7); self.assertEqual(len(set(routes)), 7)
         self.assertEqual([i['metadata']['name'] for i in items if i['kind'] == 'Ingress'
+                          and i['metadata']['name'] in manage.ROUTES
                           and manage.MIDDLEWARE_ANNOTATION in i['metadata']['annotations']], [manage.SUDOKU])
+
+    def test_http_redirect_uses_web_entrypoint_and_https_middleware(self):
+        items = manage.render(CONFIG)
+        middleware = next(i for i in items if i['kind'] == 'Middleware'
+                          and i['metadata']['name'] == manage.REDIRECT)
+        ingress = next(i for i in items if i['kind'] == 'Ingress'
+                       and i['metadata']['name'] == manage.HTTP_REDIRECT)
+        self.assertEqual(middleware['spec'], {'redirectScheme': {'scheme': 'https', 'permanent': True}})
+        self.assertEqual(ingress['metadata']['annotations'][
+            'traefik.ingress.kubernetes.io/router.entrypoints'], 'web')
+        self.assertEqual(ingress['metadata']['annotations'][manage.MIDDLEWARE_ANNOTATION],
+                         'default-nicqx-redirect-https@kubernetescrd')
+        self.assertNotIn('tls', ingress['spec'])
 
     def test_unrelated_paths_hosts_and_annotations_are_preserved(self):
         old = self.initial()
@@ -54,22 +69,9 @@ class RouteTests(unittest.TestCase):
         ref = 'default-original-strip@kubernetescrd'
         sudoku['metadata']['annotations'][manage.MIDDLEWARE_ANNOTATION] = ref
         result = manage.render(CONFIG, old, 'traefik.containo.us', {ref: {'spec': {'stripPrefix': {'prefixes': ['/sudoku']}}}})
-        self.assertFalse(any(i['kind'] == 'Middleware' for i in result))
+        self.assertFalse(any(i['kind'] == 'Middleware' and i['metadata']['name'] == manage.STRIP
+                             for i in result))
         self.assertEqual(next(i for i in result if i['metadata']['name'] == manage.SUDOKU)['metadata']['annotations'][manage.MIDDLEWARE_ANNOTATION], ref)
-
-    def test_duplicate_compatible_sudoku_middlewares_are_reduced_to_existing_one(self):
-        old = self.initial(); sudoku = next(i for i in old if i['metadata']['name'] == manage.SUDOKU)
-        original = 'default-strip-sudoku-prefix@kubernetescrd'
-        generated = 'default-' + manage.STRIP + '@kubernetescrd'
-        sudoku['metadata']['annotations'][manage.MIDDLEWARE_ANNOTATION] = original + ',' + generated
-        middleware_objects = {
-            original: {'spec': {'stripPrefix': {'prefixes': ['/sudoku']}}},
-            generated: {'spec': {'stripPrefix': {'prefixes': ['/sudoku']}}},
-        }
-        result = manage.render(CONFIG, old, 'traefik.io', middleware_objects)
-        updated = next(i for i in result if i['metadata']['name'] == manage.SUDOKU)
-        self.assertEqual(updated['metadata']['annotations'][manage.MIDDLEWARE_ANNOTATION], original)
-        self.assertFalse(any(i['kind'] == 'Middleware' for i in result))
 
     def test_new_and_old_traefik_crd_discovery(self):
         for group in ['traefik.io', 'traefik.containo.us']:

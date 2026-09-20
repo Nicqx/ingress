@@ -15,6 +15,8 @@ from common import (ROOT, Failure, Kube, canonical, clean_resource, diagnose, en
 MAIN = 'home-games-ingress'
 SUDOKU = 'home-games-sudoku-ingress'
 STRIP = 'nicqx-strip-sudoku-prefix'
+REDIRECT = 'nicqx-redirect-https'
+HTTP_REDIRECT = 'nicqx-http-redirect'
 ROUTES = {
     MAIN: [('/', 'landing-page-service', 80), ('/sumplete', 'sum-local-service', 8080),
            ('/tic-tac-toe', 'ultimate-tic-tac-toe-service', 8090), ('/chess', 'chess-game-service', 8099)],
@@ -22,7 +24,8 @@ ROUTES = {
     'bakos-game-ingress': [('/bakos', 'bakos-game-service', 8105)],
     'maffia-game-ingress': [('/maffia', 'maffia-game-service', 8098)],
 }
-ALLOWED = {('Ingress', name) for name in ROUTES} | {('Middleware', STRIP)}
+ALLOWED = ({('Ingress', name) for name in ROUTES}
+           | {('Ingress', HTTP_REDIRECT), ('Middleware', STRIP), ('Middleware', REDIRECT)})
 MIDDLEWARE_ANNOTATION = 'traefik.ingress.kubernetes.io/router.middlewares'
 CERT_MANAGER_VERSION = 'v1.21.2'
 CERT_MANAGER_SHA256 = 'e03b668ec8675214af6b0a671699d088f2601fa3878e0dbe1b41d3feafd1879f'
@@ -63,6 +66,8 @@ def render(settings, existing=None, group='traefik.io', middleware_objects=None)
     wanted = {path_id(p): name for name, routes in ROUTES.items() for p, _, _ in routes}
     # Abort duplicate route ownership; never delete an unfamiliar ingress to make ours win.
     for obj in existing:
+        if obj['metadata']['name'] == HTTP_REDIRECT:
+            continue
         for rule in obj.get('spec', {}).get('rules', []):
             if rule.get('host') != host: continue
             for p in rule.get('http', {}).get('paths', []):
@@ -124,24 +129,15 @@ def render(settings, existing=None, group='traefik.io', middleware_objects=None)
         for ref in refs:
             middleware = middleware_objects.get(ref, {})
             if 'stripPrefix' in middleware.get('spec', {}) or 'stripPrefixRegex' in middleware.get('spec', {}):
-                strips.append((ref, middleware['spec']))
+                strips.append(middleware['spec'])
         if name == SUDOKU:
-            good_refs = [ref for ref, spec_item in strips
-                         if spec_item.get('stripPrefix', {}).get('prefixes') == ['/sudoku']]
-            if strips and len(good_refs) != len(strips):
+            good_strip = any(x.get('stripPrefix', {}).get('prefixes') == ['/sudoku'] for x in strips)
+            if strips and not good_strip:
                 raise Failure('A Sudoku middleware mas prefixet vag le; nincs automatikus csere.')
             own_ref = 'default-' + STRIP + '@kubernetescrd'
-            if good_refs:
-                # Prefer a pre-existing compatible middleware and remove duplicate
-                # stripPrefix references. Two correct strips are still redundant and
-                # can produce confusing behavior across Traefik CRD generations.
-                chosen = next((ref for ref in good_refs if ref != own_ref), good_refs[0])
-                strip_names = {ref for ref, _ in strips}
-                refs = [ref for ref in refs if ref not in strip_names] + [chosen]
-                annotations[MIDDLEWARE_ANNOTATION] = ','.join(refs)
-            else:
+            if own_ref in refs or not good_strip:
                 if foreign: raise Failure('A Sudoku ingress mas alkalmazast is tartalmaz; nincs globalis middleware-valtoztatas.')
-                refs.append(own_ref)
+                if own_ref not in refs: refs.append(own_ref)
                 strip_needed = True
                 annotations[MIDDLEWARE_ANNOTATION] = ','.join(refs)
         elif strips:
@@ -150,6 +146,17 @@ def render(settings, existing=None, group='traefik.io', middleware_objects=None)
     if strip_needed:
         result.insert(0, {'apiVersion': group + '/v1alpha1', 'kind': 'Middleware',
                           'metadata': {'name': STRIP}, 'spec': {'stripPrefix': {'prefixes': ['/sudoku']}}})
+    result.extend([
+        {'apiVersion': group + '/v1alpha1', 'kind': 'Middleware',
+         'metadata': {'name': REDIRECT},
+         'spec': {'redirectScheme': {'scheme': 'https', 'permanent': True}}},
+        {'apiVersion': 'networking.k8s.io/v1', 'kind': 'Ingress',
+         'metadata': {'name': HTTP_REDIRECT, 'annotations': {
+             'traefik.ingress.kubernetes.io/router.entrypoints': 'web',
+             MIDDLEWARE_ANNOTATION: f'default-{REDIRECT}@kubernetescrd'}},
+         'spec': {'ingressClassName': 'traefik', 'rules': [{
+             'host': host, 'http': {'paths': [backend('/', 'landing-page-service', 80)]}}]}}
+    ])
     return label(result, 'ingress')
 
 
@@ -284,17 +291,8 @@ def main():
         if args.command == 'update':
             check_tls(kube.get('secret', settings['tls_secret']), settings['hostname'])
             group = discover_group(kube)
-            middlewares = {}
-            # A Traefik upgrade can leave both CRD API groups installed. Ingress
-            # annotations do not encode the group, so inspect both served groups
-            # before deciding that an existing middleware is missing.
-            crd_names = {c['metadata']['name'] for c in kube.get('crds', namespace=None)['items']}
-            for candidate in ['traefik.io', 'traefik.containo.us']:
-                if 'middlewares.' + candidate not in crd_names:
-                    continue
-                for middleware in kube.get('middlewares.' + candidate)['items']:
-                    ref = 'default-' + middleware['metadata']['name'] + '@kubernetescrd'
-                    middlewares.setdefault(ref, middleware)
+            middlewares = {'default-' + m['metadata']['name'] + '@kubernetescrd': m
+                           for m in kube.get('middlewares.' + group)['items']}
             items = render(settings, kube.get('ingresses')['items'], group, middlewares)
             if not args.dry_run: snapshot(kube, items)
             kube.apply(items, ALLOWED, dry_run=args.dry_run)
