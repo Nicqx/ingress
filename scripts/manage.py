@@ -124,15 +124,24 @@ def render(settings, existing=None, group='traefik.io', middleware_objects=None)
         for ref in refs:
             middleware = middleware_objects.get(ref, {})
             if 'stripPrefix' in middleware.get('spec', {}) or 'stripPrefixRegex' in middleware.get('spec', {}):
-                strips.append(middleware['spec'])
+                strips.append((ref, middleware['spec']))
         if name == SUDOKU:
-            good_strip = any(x.get('stripPrefix', {}).get('prefixes') == ['/sudoku'] for x in strips)
-            if strips and not good_strip:
+            good_refs = [ref for ref, spec_item in strips
+                         if spec_item.get('stripPrefix', {}).get('prefixes') == ['/sudoku']]
+            if strips and len(good_refs) != len(strips):
                 raise Failure('A Sudoku middleware mas prefixet vag le; nincs automatikus csere.')
             own_ref = 'default-' + STRIP + '@kubernetescrd'
-            if own_ref in refs or not good_strip:
+            if good_refs:
+                # Prefer a pre-existing compatible middleware and remove duplicate
+                # stripPrefix references. Two correct strips are still redundant and
+                # can produce confusing behavior across Traefik CRD generations.
+                chosen = next((ref for ref in good_refs if ref != own_ref), good_refs[0])
+                strip_names = {ref for ref, _ in strips}
+                refs = [ref for ref in refs if ref not in strip_names] + [chosen]
+                annotations[MIDDLEWARE_ANNOTATION] = ','.join(refs)
+            else:
                 if foreign: raise Failure('A Sudoku ingress mas alkalmazast is tartalmaz; nincs globalis middleware-valtoztatas.')
-                if own_ref not in refs: refs.append(own_ref)
+                refs.append(own_ref)
                 strip_needed = True
                 annotations[MIDDLEWARE_ANNOTATION] = ','.join(refs)
         elif strips:
@@ -275,8 +284,17 @@ def main():
         if args.command == 'update':
             check_tls(kube.get('secret', settings['tls_secret']), settings['hostname'])
             group = discover_group(kube)
-            middlewares = {'default-' + m['metadata']['name'] + '@kubernetescrd': m
-                           for m in kube.get('middlewares.' + group)['items']}
+            middlewares = {}
+            # A Traefik upgrade can leave both CRD API groups installed. Ingress
+            # annotations do not encode the group, so inspect both served groups
+            # before deciding that an existing middleware is missing.
+            crd_names = {c['metadata']['name'] for c in kube.get('crds', namespace=None)['items']}
+            for candidate in ['traefik.io', 'traefik.containo.us']:
+                if 'middlewares.' + candidate not in crd_names:
+                    continue
+                for middleware in kube.get('middlewares.' + candidate)['items']:
+                    ref = 'default-' + middleware['metadata']['name'] + '@kubernetescrd'
+                    middlewares.setdefault(ref, middleware)
             items = render(settings, kube.get('ingresses')['items'], group, middlewares)
             if not args.dry_run: snapshot(kube, items)
             kube.apply(items, ALLOWED, dry_run=args.dry_run)
