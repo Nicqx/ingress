@@ -1,0 +1,5 @@
+{
+  "hostname": "pmqxyz.hopto.org",
+  "tls_secret": "my-tls-secret",
+  "acme_email": "miklos.d.parrag@gmail.com"
+}
