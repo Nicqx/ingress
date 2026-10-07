@@ -23,6 +23,7 @@ ROUTES = {
     SUDOKU: [('/sudoku', 'sudoku-app', 9097)],
     'bakos-game-ingress': [('/bakos', 'bakos-game-service', 8105)],
     'maffia-game-ingress': [('/maffia', 'maffia-game-service', 8098)],
+    'citadella-game-ingress': [('/citadella', 'citadella-game-service', 8106)],
 }
 ALLOWED = ({('Ingress', name) for name in ROUTES}
            | {('Ingress', HTTP_REDIRECT), ('Middleware', STRIP), ('Middleware', REDIRECT)})
