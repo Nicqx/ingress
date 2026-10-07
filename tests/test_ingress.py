@@ -23,7 +23,7 @@ class RouteTests(unittest.TestCase):
         routes = [(r['host'], p['path']) for i in items if i['kind'] == 'Ingress'
                   and i['metadata']['name'] in manage.ROUTES
                   for r in i['spec']['rules'] for p in r['http']['paths']]
-        self.assertEqual(len(routes), 7); self.assertEqual(len(set(routes)), 7)
+        self.assertEqual(len(routes), 8); self.assertEqual(len(set(routes)), 8)
         self.assertEqual([i['metadata']['name'] for i in items if i['kind'] == 'Ingress'
                           and i['metadata']['name'] in manage.ROUTES
                           and manage.MIDDLEWARE_ANNOTATION in i['metadata']['annotations']], [manage.SUDOKU])
