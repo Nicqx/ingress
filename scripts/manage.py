@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import copy
 import hashlib
+import ipaddress
 import json
 from common import restore_snapshot
 from pathlib import Path
@@ -17,6 +18,10 @@ SUDOKU = 'home-games-sudoku-ingress'
 STRIP = 'nicqx-strip-sudoku-prefix'
 REDIRECT = 'nicqx-redirect-https'
 HTTP_REDIRECT = 'nicqx-http-redirect'
+GRANDMA_INGRESS = 'grandma-portal-ingress'
+GRANDMA_SERVICE = 'grandma-portal-service'
+GRANDMA_ENDPOINT_SLICE = 'grandma-portal-endpoints'
+GRANDMA_PATH = '/grandma'
 ROUTES = {
     MAIN: [('/', 'landing-page-service', 80), ('/sumplete', 'sum-local-service', 8080),
            ('/tic-tac-toe', 'ultimate-tic-tac-toe-service', 8090), ('/chess', 'chess-game-service', 8099)],
@@ -26,7 +31,9 @@ ROUTES = {
     'citadella-game-ingress': [('/citadella', 'citadella-game-service', 8106)],
 }
 ALLOWED = ({('Ingress', name) for name in ROUTES}
-           | {('Ingress', HTTP_REDIRECT), ('Middleware', STRIP), ('Middleware', REDIRECT)})
+           | {('Ingress', HTTP_REDIRECT), ('Middleware', STRIP), ('Middleware', REDIRECT),
+              ('Ingress', GRANDMA_INGRESS), ('Service', GRANDMA_SERVICE),
+              ('EndpointSlice', GRANDMA_ENDPOINT_SLICE)})
 MIDDLEWARE_ANNOTATION = 'traefik.ingress.kubernetes.io/router.middlewares'
 CERT_MANAGER_VERSION = 'v1.21.2'
 CERT_MANAGER_SHA256 = 'e03b668ec8675214af6b0a671699d088f2601fa3878e0dbe1b41d3feafd1879f'
@@ -161,6 +168,106 @@ def render(settings, existing=None, group='traefik.io', middleware_objects=None)
     return label(result, 'ingress')
 
 
+def grandma_backend(settings):
+    raw_ip = str(settings.get('grandma_backend_ip', '192.168.1.10')).strip()
+    try:
+        ip = str(ipaddress.ip_address(raw_ip))
+    except ValueError:
+        raise Failure('Ervenytelen grandma_backend_ip.') from None
+    try:
+        port = int(settings.get('grandma_backend_port', 8090))
+    except (TypeError, ValueError):
+        raise Failure('Ervenytelen grandma_backend_port.') from None
+    if not 1 <= port <= 65535:
+        raise Failure('A grandma_backend_port 1..65535 kozott legyen.')
+    return ip, port
+
+
+def check_grandma_backend(settings):
+    ip, port = grandma_backend(settings)
+    url = f'http://{ip}:{port}/healthz'
+    try:
+        with urllib.request.urlopen(url, timeout=4) as response:
+            if response.status != 200:
+                raise Failure(f'A grandma portal healthcheck HTTP {response.status}.')
+    except (OSError, urllib.error.URLError) as exc:
+        raise Failure(f'A grandma portal nem erheto el a NUC hoston: {url} ({exc})') from None
+
+
+def grandma_resources(settings, existing_ingresses=None):
+    existing_ingresses = existing_ingresses or []
+    host = settings['hostname']
+    ip, port = grandma_backend(settings)
+
+    for obj in existing_ingresses:
+        for rule in obj.get('spec', {}).get('rules', []):
+            if rule.get('host') != host:
+                continue
+            for path in rule.get('http', {}).get('paths', []):
+                if path_id(path.get('path', '/')) != GRANDMA_PATH:
+                    continue
+                if obj.get('metadata', {}).get('name') != GRANDMA_INGRESS:
+                    raise Failure(
+                        f"Utkozo ingress: {obj['metadata']['name']} ({GRANDMA_PATH}); "
+                        "a grandma publikacio nem irja felul."
+                    )
+
+    service = {
+        'apiVersion': 'v1',
+        'kind': 'Service',
+        'metadata': {'name': GRANDMA_SERVICE},
+        'spec': {
+            'ports': [{
+                'name': 'http',
+                'protocol': 'TCP',
+                'port': port,
+                'targetPort': port,
+            }],
+        },
+    }
+    endpoint_slice = {
+        'apiVersion': 'discovery.k8s.io/v1',
+        'kind': 'EndpointSlice',
+        'metadata': {
+            'name': GRANDMA_ENDPOINT_SLICE,
+            'labels': {'kubernetes.io/service-name': GRANDMA_SERVICE},
+        },
+        'addressType': 'IPv4',
+        'ports': [{
+            'name': 'http',
+            'protocol': 'TCP',
+            'port': port,
+        }],
+        'endpoints': [{
+            'addresses': [ip],
+            'conditions': {'ready': True},
+        }],
+    }
+    ingress = {
+        'apiVersion': 'networking.k8s.io/v1',
+        'kind': 'Ingress',
+        'metadata': {
+            'name': GRANDMA_INGRESS,
+            'annotations': {
+                'traefik.ingress.kubernetes.io/router.entrypoints': 'websecure',
+                'traefik.ingress.kubernetes.io/router.tls': 'true',
+            },
+        },
+        'spec': {
+            'ingressClassName': 'traefik',
+            'rules': [{
+                'host': host,
+                'http': {'paths': [backend(GRANDMA_PATH, GRANDMA_SERVICE, port)]},
+            }],
+            'tls': [{
+                'hosts': [host],
+                'secretName': settings['tls_secret'],
+            }],
+        },
+    }
+    return label([service, endpoint_slice, ingress], 'ingress')
+
+
 def check_tls(secret, host):
     try:
         if secret['type'] != 'kubernetes.io/tls': raise ValueError()
@@ -274,13 +381,13 @@ def enable_renewal(kube, settings, dry_run):
 
 def main():
     p = parser('Traefik utvonalak es TLS koltoztetes',
-               ['update', 'rollback', 'render', 'diagnose', 'export-tls', 'import-tls', 'install-cert-manager', 'enable-renewal'])
+               ['update', 'rollback', 'render', 'diagnose', 'export-tls', 'import-tls', 'install-cert-manager', 'enable-renewal', 'publish-grandma'])
     p.add_argument('--file')
     args = p.parse_args()
     settings = config()
     if args.command == 'render': print(json.dumps(render(settings), indent=2)); return
     if args.command in {'export-tls', 'import-tls'} and not args.file: p.error('--file szukseges')
-    if args.dry_run and args.command not in {'update', 'rollback', 'import-tls', 'enable-renewal'}: p.error('Ehhez a parancshoz nincs dry-run')
+    if args.dry_run and args.command not in {'update', 'rollback', 'import-tls', 'enable-renewal', 'publish-grandma'}: p.error('Ehhez a parancshoz nincs dry-run')
     kube = Kube(args.target, args.context)
     kube.verify(require_ready=args.command != 'diagnose')
     if args.command == 'diagnose': diagnose(kube); return
@@ -300,7 +407,17 @@ def main():
         elif args.command == 'export-tls': export_tls(kube, settings, args.file)
         elif args.command == 'import-tls': import_tls(kube, settings, args.file, args.dry_run)
         elif args.command == 'install-cert-manager': install_cert_manager(kube)
-        elif args.command == 'enable-renewal': enable_renewal(kube, settings, args.dry_run)
+        elif args.command == 'enable-renewal':
+            enable_renewal(kube, settings, args.dry_run)
+        elif args.command == 'publish-grandma':
+            if kube.target != 'nuc':
+                raise Failure('A grandma portal Docker Compose szolgaltatas a NUC-on publikalhato.')
+            check_tls(kube.get('secret', settings['tls_secret']), settings['hostname'])
+            check_grandma_backend(settings)
+            items = grandma_resources(settings, kube.get('ingresses')['items'])
+            if not args.dry_run:
+                snapshot(kube, items)
+            kube.apply(items, ALLOWED, dry_run=args.dry_run)
 
 
 if __name__ == '__main__':
