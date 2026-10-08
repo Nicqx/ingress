@@ -112,27 +112,13 @@ class TLSTests(unittest.TestCase):
 
 
 class GrandmaPublicationTests(unittest.TestCase):
-    def test_grandma_bridge_targets_nuc_compose_port(self):
+    def test_grandma_ingress_targets_cluster_service(self):
         items = manage.grandma_resources(CONFIG)
-        by_kind = {item["kind"]: item for item in items}
+        self.assertEqual(len(items), 1)
+        ingress = items[0]
+        self.assertEqual(ingress["kind"], "Ingress")
+        self.assertEqual(ingress["metadata"]["name"], manage.GRANDMA_INGRESS)
 
-        service = by_kind["Service"]
-        self.assertEqual(service["metadata"]["name"], manage.GRANDMA_SERVICE)
-        self.assertEqual(service["spec"]["ports"][0]["port"], 8090)
-        self.assertNotIn("selector", service["spec"])
-
-        endpoint_slice = by_kind["EndpointSlice"]
-        self.assertEqual(
-            endpoint_slice["metadata"]["labels"]["kubernetes.io/service-name"],
-            manage.GRANDMA_SERVICE,
-        )
-        self.assertEqual(
-            endpoint_slice["endpoints"][0]["addresses"],
-            ["192.168.1.10"],
-        )
-        self.assertEqual(endpoint_slice["ports"][0]["port"], 8090)
-
-        ingress = by_kind["Ingress"]
         rule = ingress["spec"]["rules"][0]
         self.assertEqual(rule["host"], CONFIG["hostname"])
         path = rule["http"]["paths"][0]
@@ -142,11 +128,15 @@ class GrandmaPublicationTests(unittest.TestCase):
             manage.GRANDMA_SERVICE,
         )
         self.assertEqual(
+            path["backend"]["service"]["port"]["number"],
+            8090,
+        )
+        self.assertEqual(
             ingress["spec"]["tls"][0]["secretName"],
             CONFIG["tls_secret"],
         )
 
-    def test_grandma_bridge_refuses_foreign_route_owner(self):
+    def test_grandma_ingress_refuses_foreign_route_owner(self):
         foreign = {
             "apiVersion": "networking.k8s.io/v1",
             "kind": "Ingress",
@@ -165,16 +155,26 @@ class GrandmaPublicationTests(unittest.TestCase):
         with self.assertRaises(Failure):
             manage.grandma_resources(CONFIG, [foreign])
 
-    def test_grandma_backend_config_is_validated(self):
-        configured = dict(CONFIG)
-        configured["grandma_backend_ip"] = "192.168.1.10"
-        configured["grandma_backend_port"] = 18090
-        self.assertEqual(
-            manage.grandma_backend(configured),
-            ("192.168.1.10", 18090),
-        )
+    def test_grandma_service_check_accepts_ready_endpoint(self):
+        kube = Mock()
+        kube.get.return_value = {
+            "spec": {
+                "ports": [{"port": 8090}]
+            }
+        }
+        kube.call.return_value = json.dumps({
+            "items": [{
+                "endpoints": [{
+                    "addresses": ["10.42.0.10"],
+                    "conditions": {"ready": True},
+                }]
+            }]
+        }).encode()
 
-        invalid = dict(CONFIG)
-        invalid["grandma_backend_ip"] = "not-an-ip"
+        manage.check_grandma_service(kube)
+
+    def test_grandma_service_check_rejects_missing_service(self):
+        kube = Mock()
+        kube.get.return_value = None
         with self.assertRaises(Failure):
-            manage.grandma_backend(invalid)
+            manage.check_grandma_service(kube)
