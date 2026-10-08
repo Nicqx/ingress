@@ -1,5 +1,7 @@
 {
   "hostname": "pmqxyz.hopto.org",
   "tls_secret": "my-tls-secret",
-  "acme_email": "miklos.d.parrag@gmail.com"
+  "acme_email": "miklos.d.parrag@gmail.com",
+  "grandma_backend_ip": "192.168.1.10",
+  "grandma_backend_port": 8090
 }
