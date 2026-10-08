@@ -132,9 +132,11 @@ A cert-manager teljes eltávolítása külön művelet; más Certificate-ek megl
 
 ## Grandma portal publikálása HTTPS-en
 
-A `grandma_recepies` portal Docker Compose-ban fut a NUC-on, ezért nem
-normál selectoros Kubernetes Service-ként jelenik meg. A publikálás külön,
-explicit művelet:
+A `grandma_recepies` portal rendes k3s Deployment + ClusterIP Service-ként
+fut a NUC-on. A grandma repo telepítése hozza létre a
+`grandma-portal-service:8090` Service-t.
+
+Az ingress publikálása külön, explicit művelet:
 
 ```bash
 cd ~/codes/ingress
@@ -150,22 +152,26 @@ KUBECTL='sudo k3s kubectl' \
 A parancs csak a NUC-on fut. Előtte ellenőrzi:
 
 - a `pmqxyz.hopto.org` TLS secretet;
-- hogy a `192.168.1.10:8090/healthz` backend válaszol;
+- hogy létezik a `grandma-portal-service`;
+- hogy a Service mögött van Ready EndpointSlice endpoint;
 - hogy nincs másik ingress tulajdonában a `/grandma` útvonal.
 
-Ezután három erőforrást hoz létre/frissít:
+Ezután csak az alábbi erőforrást kezeli:
 
-- `Service/grandma-portal-service`;
-- `EndpointSlice/grandma-portal-endpoints`, ami a NUC host
-  `192.168.1.10:8090` portjára mutat;
-- `Ingress/grandma-portal-ingress`, amely a
-  `https://pmqxyz.hopto.org/grandma/` útvonalat szolgálja ki.
+- `Ingress/grandma-portal-ingress`
+
+A route:
+
+```text
+https://pmqxyz.hopto.org/grandma/
+        -> Traefik
+        -> grandma-portal-service:8090
+        -> grandma-portal pod
+```
 
 A grandma alkalmazás maga kezeli a `/grandma` prefixet, ezért ehhez az
 ingresshez **nem** tartozik StripPrefix middleware.
 
-A normál `./update.sh --target nuc` nem függ a grandma containertől és nem
-módosítja ezt a külön publikációt. Új WAN portot nem kell nyitni: ugyanazt a
-443-as Traefik/TLS bejáratot használja, mint a többi `pmqxyz.hopto.org`
-útvonal.
+Új WAN portot nem kell nyitni: ugyanazt a 443-as Traefik/TLS bejáratot
+használja, mint a többi `pmqxyz.hopto.org` útvonal.
 
