@@ -4,13 +4,10 @@ from __future__ import annotations
 import base64
 import copy
 import hashlib
-import ipaddress
 import json
 from common import restore_snapshot
 from pathlib import Path
 import re
-import urllib.error
-import urllib.request
 from common import (ROOT, Failure, Kube, canonical, clean_resource, diagnose, entrypoint,
                     label, operation_lock, parser, private_write, run, snapshot)
 
@@ -21,7 +18,6 @@ REDIRECT = 'nicqx-redirect-https'
 HTTP_REDIRECT = 'nicqx-http-redirect'
 GRANDMA_INGRESS = 'grandma-portal-ingress'
 GRANDMA_SERVICE = 'grandma-portal-service'
-GRANDMA_ENDPOINT_SLICE = 'grandma-portal-endpoints'
 GRANDMA_PATH = '/grandma'
 ROUTES = {
     MAIN: [('/', 'landing-page-service', 80), ('/sumplete', 'sum-local-service', 8080),
@@ -33,8 +29,7 @@ ROUTES = {
 }
 ALLOWED = ({('Ingress', name) for name in ROUTES}
            | {('Ingress', HTTP_REDIRECT), ('Middleware', STRIP), ('Middleware', REDIRECT),
-              ('Ingress', GRANDMA_INGRESS), ('Service', GRANDMA_SERVICE),
-              ('EndpointSlice', GRANDMA_ENDPOINT_SLICE)})
+              ('Ingress', GRANDMA_INGRESS)})
 MIDDLEWARE_ANNOTATION = 'traefik.ingress.kubernetes.io/router.middlewares'
 CERT_MANAGER_VERSION = 'v1.21.2'
 CERT_MANAGER_SHA256 = 'e03b668ec8675214af6b0a671699d088f2601fa3878e0dbe1b41d3feafd1879f'
@@ -169,36 +164,45 @@ def render(settings, existing=None, group='traefik.io', middleware_objects=None)
     return label(result, 'ingress')
 
 
-def grandma_backend(settings):
-    raw_ip = str(settings.get('grandma_backend_ip', '192.168.1.10')).strip()
-    try:
-        ip = str(ipaddress.ip_address(raw_ip))
-    except ValueError:
-        raise Failure('Ervenytelen grandma_backend_ip.') from None
-    try:
-        port = int(settings.get('grandma_backend_port', 8090))
-    except (TypeError, ValueError):
-        raise Failure('Ervenytelen grandma_backend_port.') from None
-    if not 1 <= port <= 65535:
-        raise Failure('A grandma_backend_port 1..65535 kozott legyen.')
-    return ip, port
+def check_grandma_service(kube):
+    service = kube.get('service', GRANDMA_SERVICE)
+    if not service:
+        raise Failure(
+            'Hianyzik a grandma-portal-service. '
+            'Elobb telepitsd a grandma_recepies k3s Deploymentet.'
+        )
 
+    ports = service.get('spec', {}).get('ports', [])
+    if not any(
+        int(port.get('port', 0)) == 8090
+        for port in ports
+        if isinstance(port, dict)
+    ):
+        raise Failure('A grandma-portal-service nem a vart 8090 portot szolgaltatja.')
 
-def check_grandma_backend(settings):
-    ip, port = grandma_backend(settings)
-    url = f'http://{ip}:{port}/healthz'
-    try:
-        with urllib.request.urlopen(url, timeout=4) as response:
-            if response.status != 200:
-                raise Failure(f'A grandma portal healthcheck HTTP {response.status}.')
-    except (OSError, urllib.error.URLError) as exc:
-        raise Failure(f'A grandma portal nem erheto el a NUC hoston: {url} ({exc})') from None
+    raw = kube.call(
+        'get', 'endpointslice',
+        '-l', f'kubernetes.io/service-name={GRANDMA_SERVICE}',
+        '-n', 'default',
+        '-o', 'json',
+    )
+    data = json.loads(raw)
+    ready = any(
+        endpoint.get('addresses')
+        and endpoint.get('conditions', {}).get('ready', True) is not False
+        for item in data.get('items', [])
+        for endpoint in item.get('endpoints', [])
+    )
+    if not ready:
+        raise Failure(
+            'A grandma-portal-service mogott nincs Ready endpoint. '
+            'Ellenorizd a grandma-portal Deploymentet.'
+        )
 
 
 def grandma_resources(settings, existing_ingresses=None):
     existing_ingresses = existing_ingresses or []
     host = settings['hostname']
-    ip, port = grandma_backend(settings)
 
     for obj in existing_ingresses:
         for rule in obj.get('spec', {}).get('rules', []):
@@ -213,37 +217,6 @@ def grandma_resources(settings, existing_ingresses=None):
                         "a grandma publikacio nem irja felul."
                     )
 
-    service = {
-        'apiVersion': 'v1',
-        'kind': 'Service',
-        'metadata': {'name': GRANDMA_SERVICE},
-        'spec': {
-            'ports': [{
-                'name': 'http',
-                'protocol': 'TCP',
-                'port': port,
-                'targetPort': port,
-            }],
-        },
-    }
-    endpoint_slice = {
-        'apiVersion': 'discovery.k8s.io/v1',
-        'kind': 'EndpointSlice',
-        'metadata': {
-            'name': GRANDMA_ENDPOINT_SLICE,
-            'labels': {'kubernetes.io/service-name': GRANDMA_SERVICE},
-        },
-        'addressType': 'IPv4',
-        'ports': [{
-            'name': 'http',
-            'protocol': 'TCP',
-            'port': port,
-        }],
-        'endpoints': [{
-            'addresses': [ip],
-            'conditions': {'ready': True},
-        }],
-    }
     ingress = {
         'apiVersion': 'networking.k8s.io/v1',
         'kind': 'Ingress',
@@ -258,7 +231,11 @@ def grandma_resources(settings, existing_ingresses=None):
             'ingressClassName': 'traefik',
             'rules': [{
                 'host': host,
-                'http': {'paths': [backend(GRANDMA_PATH, GRANDMA_SERVICE, port)]},
+                'http': {
+                    'paths': [
+                        backend(GRANDMA_PATH, GRANDMA_SERVICE, 8090)
+                    ]
+                },
             }],
             'tls': [{
                 'hosts': [host],
@@ -266,8 +243,7 @@ def grandma_resources(settings, existing_ingresses=None):
             }],
         },
     }
-    return label([service, endpoint_slice, ingress], 'ingress')
-
+    return label([ingress], 'ingress')
 
 def check_tls(secret, host):
     try:
@@ -412,9 +388,9 @@ def main():
             enable_renewal(kube, settings, args.dry_run)
         elif args.command == 'publish-grandma':
             if kube.target != 'nuc':
-                raise Failure('A grandma portal Docker Compose szolgaltatas a NUC-on publikalhato.')
+                raise Failure('A grandma portal csak a NUC k3s clustererol publikalhato.')
             check_tls(kube.get('secret', settings['tls_secret']), settings['hostname'])
-            check_grandma_backend(settings)
+            check_grandma_service(kube)
             items = grandma_resources(settings, kube.get('ingresses')['items'])
             if not args.dry_run:
                 snapshot(kube, items)
