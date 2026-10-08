@@ -128,3 +128,44 @@ sudo k3s kubectl delete secret/my-tls-secret -n default
 ```
 
 A cert-manager teljes eltávolítása külön művelet; más Certificate-ek meglétét előbb ellenőrizd. A Traefik a k3s része, ezt a repo nem távolítja el.
+
+
+## Grandma portal publikálása HTTPS-en
+
+A `grandma_recepies` portal Docker Compose-ban fut a NUC-on, ezért nem
+normál selectoros Kubernetes Service-ként jelenik meg. A publikálás külön,
+explicit művelet:
+
+```bash
+cd ~/codes/ingress
+git pull --ff-only
+
+KUBECTL='sudo k3s kubectl' \
+  python3 scripts/manage.py publish-grandma --target nuc --dry-run
+
+KUBECTL='sudo k3s kubectl' \
+  python3 scripts/manage.py publish-grandma --target nuc
+```
+
+A parancs csak a NUC-on fut. Előtte ellenőrzi:
+
+- a `pmqxyz.hopto.org` TLS secretet;
+- hogy a `192.168.1.10:8090/healthz` backend válaszol;
+- hogy nincs másik ingress tulajdonában a `/grandma` útvonal.
+
+Ezután három erőforrást hoz létre/frissít:
+
+- `Service/grandma-portal-service`;
+- `EndpointSlice/grandma-portal-endpoints`, ami a NUC host
+  `192.168.1.10:8090` portjára mutat;
+- `Ingress/grandma-portal-ingress`, amely a
+  `https://pmqxyz.hopto.org/grandma/` útvonalat szolgálja ki.
+
+A grandma alkalmazás maga kezeli a `/grandma` prefixet, ezért ehhez az
+ingresshez **nem** tartozik StripPrefix middleware.
+
+A normál `./update.sh --target nuc` nem függ a grandma containertől és nem
+módosítja ezt a külön publikációt. Új WAN portot nem kell nyitni: ugyanazt a
+443-as Traefik/TLS bejáratot használja, mint a többi `pmqxyz.hopto.org`
+útvonal.
+
