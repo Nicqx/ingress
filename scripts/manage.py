@@ -9,6 +9,7 @@ import json
 from common import restore_snapshot
 from pathlib import Path
 import re
+import urllib.error
 import urllib.request
 from common import (ROOT, Failure, Kube, canonical, clean_resource, diagnose, entrypoint,
                     label, operation_lock, parser, private_write, run, snapshot)
