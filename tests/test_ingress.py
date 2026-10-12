@@ -178,3 +178,63 @@ class GrandmaPublicationTests(unittest.TestCase):
         kube.get.return_value = None
         with self.assertRaises(Failure):
             manage.check_grandma_service(kube)
+
+
+class MunkaidoPublicationTests(unittest.TestCase):
+    def test_munkaido_ingress_strips_prefix_and_targets_service(self):
+        items = manage.munkaido_resources(CONFIG)
+        self.assertEqual(len(items), 2)
+        middleware = next(item for item in items if item["kind"] == "Middleware")
+        ingress = next(item for item in items if item["kind"] == "Ingress")
+
+        self.assertEqual(middleware["metadata"]["name"], manage.MUNKAIDO_STRIP)
+        self.assertEqual(
+            middleware["spec"],
+            {"stripPrefix": {"prefixes": ["/munkaido"]}},
+        )
+        self.assertEqual(ingress["metadata"]["name"], manage.MUNKAIDO_INGRESS)
+        self.assertEqual(
+            ingress["metadata"]["annotations"][manage.MIDDLEWARE_ANNOTATION],
+            "default-munkaido-strip-prefix@kubernetescrd",
+        )
+        path = ingress["spec"]["rules"][0]["http"]["paths"][0]
+        self.assertEqual(path["path"], "/munkaido")
+        self.assertEqual(path["backend"]["service"]["name"], "munkaido-nyilvantarto")
+        self.assertEqual(path["backend"]["service"]["port"]["number"], 8000)
+        self.assertEqual(
+            ingress["spec"]["tls"][0]["secretName"],
+            CONFIG["tls_secret"],
+        )
+
+    def test_munkaido_ingress_refuses_foreign_route_owner(self):
+        foreign = {
+            "apiVersion": "networking.k8s.io/v1",
+            "kind": "Ingress",
+            "metadata": {"name": "foreign"},
+            "spec": {"rules": [{
+                "host": CONFIG["hostname"],
+                "http": {"paths": [
+                    manage.backend("/munkaido", "foreign-service", 80)
+                ]},
+            }]},
+        }
+        with self.assertRaises(Failure):
+            manage.munkaido_resources(CONFIG, [foreign])
+
+    def test_munkaido_service_check_accepts_ready_endpoint(self):
+        kube = Mock()
+        kube.get.return_value = {"spec": {"ports": [{"port": 8000}]}}
+        kube.call.return_value = json.dumps({
+            "items": [{"endpoints": [{
+                "addresses": ["10.42.0.20"],
+                "conditions": {"ready": True},
+            }]}]
+        }).encode()
+        manage.check_munkaido_service(kube)
+
+    def test_munkaido_service_check_rejects_missing_service(self):
+        kube = Mock()
+        kube.get.return_value = None
+        with self.assertRaises(Failure):
+            manage.check_munkaido_service(kube)
+

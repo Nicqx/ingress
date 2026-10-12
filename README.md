@@ -11,8 +11,15 @@ Egyetlen kezelt útvonal tartozik minden játékhoz, a Pi jelenlegi erőforrásn
 | `home-games-sudoku-ingress` | `/sudoku` | `sudoku-app:9097` |
 | `bakos-game-ingress` | `/bakos` | `bakos-game-service:8105` |
 | `maffia-game-ingress` | `/maffia` | `maffia-game-service:8098` |
+| `citadella-game-ingress` | `/citadella` | `citadella-game-service:8106` |
+| `munkaido-ingress` | `/munkaido` | `munkaido-nyilvantarto:8000` |
 
-Minden útvonal `Prefix`. Csak a Sudoku igényel prefixlevágást. A többi alkalmazás maga kezeli a saját prefixét, így a WebSocket/Socket.IO útvonalak is megmaradnak.
+Minden útvonal `Prefix`. A Sudoku és a külön publikált munkaidő-kezelő igényel
+prefixlevágást. A munkaidő-kezelő middleware-je az előtag eltávolítása mellett
+`X-Forwarded-Prefix: /munkaido` fejlécet is ad, ezért a Flask alkalmazás a
+generált linkeket és űrlapcélokat továbbra is a publikus prefixszel készíti.
+A többi alkalmazás maga kezeli a saját prefixét, így a WebSocket/Socket.IO
+útvonalak is megmaradnak.
 
 A Middleware API-t a clusterből fedezzük fel: elsődlegesen `traefik.io/v1alpha1`, régi Pi-telepítéshez a ténylegesen kiszolgált `traefik.containo.us/v1alpha1` is kezelhető. Az alkalmazás-ingressek a `websecure` entrypointra kerülnek TLS-szel. A külön `nicqx-http-redirect` ingress a `web` entrypointról állandó HTTPS-átirányítást végez. A cert-manager pontosabb HTTP-01 solver útvonala elsőbbséget kap a gyökérútvonalnál, ezért a tanúsítvány megújítása továbbra is működik.
 
@@ -174,4 +181,50 @@ ingresshez **nem** tartozik StripPrefix middleware.
 
 Új WAN portot nem kell nyitni: ugyanazt a 443-as Traefik/TLS bejáratot
 használja, mint a többi `pmqxyz.hopto.org` útvonal.
+
+## Munkaidő-kezelő publikálása HTTPS-en
+
+A `munkaido-nyilvantarto` repo migrációja hozza létre a NUC-on a
+`munkaido-nyilvantarto:8000` ClusterIP Service-t. Először ott futtasd le a
+`migrate-to-k3s.sh` parancsot, és csak a sikeres adatbázis-ellenőrzés után
+publikáld az alkalmazást:
+
+```bash
+cd ~/codes/ingress
+git pull --ff-only
+
+KUBECTL='sudo k3s kubectl' \
+  python3 scripts/manage.py publish-munkaido --target nuc --dry-run
+
+KUBECTL='sudo k3s kubectl' \
+  python3 scripts/manage.py publish-munkaido --target nuc
+```
+
+A parancs csak a NUC-on fut, és előtte ellenőrzi:
+
+- a `pmqxyz.hopto.org` TLS secretet;
+- a `munkaido-nyilvantarto:8000` Service-t;
+- hogy a Service mögött van Ready EndpointSlice endpoint;
+- hogy nincs másik ingress tulajdonában a `/munkaido` útvonal;
+- hogy a Traefik Middleware CRD elérhető.
+
+Ezután csak az alábbi erőforrásokat kezeli:
+
+- `Middleware/munkaido-strip-prefix`;
+- `Ingress/munkaido-ingress`.
+
+A publikus cím:
+
+```text
+https://pmqxyz.hopto.org/munkaido/
+        -> Traefik + StripPrefix
+        -> munkaido-nyilvantarto:8000
+        -> munkaido-nyilvantarto pod
+```
+
+Az alkalmazás megkapja az `X-Forwarded-Prefix: /munkaido` fejlécet, így a
+belépés, regisztráció, statikus fájlok, import és export linkjei is a helyes
+publikus útvonalon maradnak. Új WAN portot nem kell nyitni; a sikeres
+ellenőrzés után a régi 1985-ös router porttovábbítás megszüntethető.
+
 

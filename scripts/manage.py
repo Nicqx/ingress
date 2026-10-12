@@ -19,6 +19,10 @@ HTTP_REDIRECT = 'nicqx-http-redirect'
 GRANDMA_INGRESS = 'grandma-portal-ingress'
 GRANDMA_SERVICE = 'grandma-portal-service'
 GRANDMA_PATH = '/grandma'
+MUNKAIDO_INGRESS = 'munkaido-ingress'
+MUNKAIDO_SERVICE = 'munkaido-nyilvantarto'
+MUNKAIDO_PATH = '/munkaido'
+MUNKAIDO_STRIP = 'munkaido-strip-prefix'
 ROUTES = {
     MAIN: [('/', 'landing-page-service', 80), ('/sumplete', 'sum-local-service', 8080),
            ('/tic-tac-toe', 'ultimate-tic-tac-toe-service', 8090), ('/chess', 'chess-game-service', 8099)],
@@ -29,7 +33,8 @@ ROUTES = {
 }
 ALLOWED = ({('Ingress', name) for name in ROUTES}
            | {('Ingress', HTTP_REDIRECT), ('Middleware', STRIP), ('Middleware', REDIRECT),
-              ('Ingress', GRANDMA_INGRESS)})
+              ('Ingress', GRANDMA_INGRESS), ('Ingress', MUNKAIDO_INGRESS),
+              ('Middleware', MUNKAIDO_STRIP)})
 MIDDLEWARE_ANNOTATION = 'traefik.ingress.kubernetes.io/router.middlewares'
 CERT_MANAGER_VERSION = 'v1.21.2'
 CERT_MANAGER_SHA256 = 'e03b668ec8675214af6b0a671699d088f2601fa3878e0dbe1b41d3feafd1879f'
@@ -245,6 +250,94 @@ def grandma_resources(settings, existing_ingresses=None):
     }
     return label([ingress], 'ingress')
 
+
+def check_munkaido_service(kube):
+    service = kube.get('service', MUNKAIDO_SERVICE)
+    if not service:
+        raise Failure(
+            'Hianyzik a munkaido-nyilvantarto Service. '
+            'Elobb futtasd a munkaido repo k3s migraciojat.'
+        )
+
+    ports = service.get('spec', {}).get('ports', [])
+    if not any(
+        int(port.get('port', 0)) == 8000
+        for port in ports
+        if isinstance(port, dict)
+    ):
+        raise Failure('A munkaido-nyilvantarto Service nem a vart 8000 portot szolgaltatja.')
+
+    raw = kube.call(
+        'get', 'endpointslice',
+        '-l', f'kubernetes.io/service-name={MUNKAIDO_SERVICE}',
+        '-n', 'default',
+        '-o', 'json',
+    )
+    data = json.loads(raw)
+    ready = any(
+        endpoint.get('addresses')
+        and endpoint.get('conditions', {}).get('ready', True) is not False
+        for item in data.get('items', [])
+        for endpoint in item.get('endpoints', [])
+    )
+    if not ready:
+        raise Failure(
+            'A munkaido-nyilvantarto Service mogott nincs Ready endpoint. '
+            'Ellenorizd a Deploymentet es az adatbazis-migraciot.'
+        )
+
+
+def munkaido_resources(settings, existing_ingresses=None, group='traefik.io'):
+    existing_ingresses = existing_ingresses or []
+    host = settings['hostname']
+
+    for obj in existing_ingresses:
+        for rule in obj.get('spec', {}).get('rules', []):
+            if rule.get('host') != host:
+                continue
+            for path in rule.get('http', {}).get('paths', []):
+                if path_id(path.get('path', '/')) != MUNKAIDO_PATH:
+                    continue
+                if obj.get('metadata', {}).get('name') != MUNKAIDO_INGRESS:
+                    raise Failure(
+                        f"Utkozo ingress: {obj['metadata']['name']} ({MUNKAIDO_PATH}); "
+                        "a munkaido publikacio nem irja felul."
+                    )
+
+    middleware = {
+        'apiVersion': group + '/v1alpha1',
+        'kind': 'Middleware',
+        'metadata': {'name': MUNKAIDO_STRIP},
+        'spec': {'stripPrefix': {'prefixes': [MUNKAIDO_PATH]}},
+    }
+    ingress = {
+        'apiVersion': 'networking.k8s.io/v1',
+        'kind': 'Ingress',
+        'metadata': {
+            'name': MUNKAIDO_INGRESS,
+            'annotations': {
+                'traefik.ingress.kubernetes.io/router.entrypoints': 'websecure',
+                'traefik.ingress.kubernetes.io/router.tls': 'true',
+                MIDDLEWARE_ANNOTATION:
+                    f'default-{MUNKAIDO_STRIP}@kubernetescrd',
+            },
+        },
+        'spec': {
+            'ingressClassName': 'traefik',
+            'rules': [{
+                'host': host,
+                'http': {'paths': [
+                    backend(MUNKAIDO_PATH, MUNKAIDO_SERVICE, 8000)
+                ]},
+            }],
+            'tls': [{
+                'hosts': [host],
+                'secretName': settings['tls_secret'],
+            }],
+        },
+    }
+    return label([middleware, ingress], 'ingress')
+
 def check_tls(secret, host):
     try:
         if secret['type'] != 'kubernetes.io/tls': raise ValueError()
@@ -358,13 +451,13 @@ def enable_renewal(kube, settings, dry_run):
 
 def main():
     p = parser('Traefik utvonalak es TLS koltoztetes',
-               ['update', 'rollback', 'render', 'diagnose', 'export-tls', 'import-tls', 'install-cert-manager', 'enable-renewal', 'publish-grandma'])
+               ['update', 'rollback', 'render', 'diagnose', 'export-tls', 'import-tls', 'install-cert-manager', 'enable-renewal', 'publish-grandma', 'publish-munkaido'])
     p.add_argument('--file')
     args = p.parse_args()
     settings = config()
     if args.command == 'render': print(json.dumps(render(settings), indent=2)); return
     if args.command in {'export-tls', 'import-tls'} and not args.file: p.error('--file szukseges')
-    if args.dry_run and args.command not in {'update', 'rollback', 'import-tls', 'enable-renewal', 'publish-grandma'}: p.error('Ehhez a parancshoz nincs dry-run')
+    if args.dry_run and args.command not in {'update', 'rollback', 'import-tls', 'enable-renewal', 'publish-grandma', 'publish-munkaido'}: p.error('Ehhez a parancshoz nincs dry-run')
     kube = Kube(args.target, args.context)
     kube.verify(require_ready=args.command != 'diagnose')
     if args.command == 'diagnose': diagnose(kube); return
@@ -395,7 +488,22 @@ def main():
             if not args.dry_run:
                 snapshot(kube, items)
             kube.apply(items, ALLOWED, dry_run=args.dry_run)
+        elif args.command == 'publish-munkaido':
+            if kube.target != 'nuc':
+                raise Failure('A munkaido alkalmazas csak a NUC k3s clustererol publikalhato.')
+            check_tls(kube.get('secret', settings['tls_secret']), settings['hostname'])
+            check_munkaido_service(kube)
+            group = discover_group(kube)
+            items = munkaido_resources(
+                settings,
+                kube.get('ingresses')['items'],
+                group,
+            )
+            if not args.dry_run:
+                snapshot(kube, items)
+            kube.apply(items, ALLOWED, dry_run=args.dry_run)
 
 
 if __name__ == '__main__':
     entrypoint(main)
+
