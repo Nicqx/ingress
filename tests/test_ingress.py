@@ -238,3 +238,89 @@ class MunkaidoPublicationTests(unittest.TestCase):
         with self.assertRaises(Failure):
             manage.check_munkaido_service(kube)
 
+
+
+class WizardPublicationTests(unittest.TestCase):
+    def test_wizard_ingress_targets_nuc_service_and_retains_prefix(self):
+        items = manage.wizard_resources(CONFIG)
+        self.assertEqual(len(items), 1)
+        ingress = items[0]
+        self.assertEqual(ingress['metadata']['name'], manage.WIZARD_INGRESS)
+        self.assertEqual(ingress['spec']['ingressClassName'], 'traefik')
+        self.assertNotIn(manage.MIDDLEWARE_ANNOTATION,
+                         ingress['metadata'].get('annotations', {}))
+        rule = ingress['spec']['rules'][0]
+        self.assertEqual(rule['host'], CONFIG['hostname'])
+        routes = rule['http']['paths']
+        self.assertEqual(len(routes), 1)
+        self.assertEqual(routes[0], manage.backend('/wizard-of-wor',
+                                                 'wizard-of-wor-service', 8107))
+        self.assertEqual(ingress['spec']['tls'], [{
+            'hosts': [CONFIG['hostname']],
+            'secretName': CONFIG['tls_secret'],
+        }])
+        self.assertIn(('Ingress', manage.WIZARD_INGRESS), manage.ALLOWED)
+
+    def test_wizard_ingress_refuses_foreign_owner(self):
+        foreign = {
+            'metadata': {'name': 'other-ingress'},
+            'spec': {'rules': [{
+                'host': CONFIG['hostname'],
+                'http': {'paths': [manage.backend(
+                    '/wizard-of-wor', 'foreign-service', 7000,
+                )]},
+            }]},
+        }
+        with self.assertRaises(Failure):
+            manage.wizard_resources(CONFIG, [foreign])
+
+    def test_wizard_refuses_changed_existing_own_route(self):
+        original = manage.wizard_resources(CONFIG)[0]
+        changed = copy.deepcopy(original)
+        changed['spec']['rules'][0]['http']['paths'][0]['backend']['service']['name'] = 'other-service'
+        with self.assertRaises(Failure):
+            manage.wizard_resources(CONFIG, [changed])
+        changed = copy.deepcopy(original)
+        changed['metadata']['annotations'][manage.MIDDLEWARE_ANNOTATION] = 'foreign-strip'
+        with self.assertRaises(Failure):
+            manage.wizard_resources(CONFIG, [changed])
+
+    def test_wizard_check_accepts_ready_service(self):
+        kube = Mock()
+        kube.get.return_value = {'spec': {'ports': [
+            {'port': 8107, 'protocol': 'TCP'},
+        ]}}
+        kube.call.return_value = json.dumps({'items': [{
+            'ports': [{'port': 8107, 'protocol': 'TCP'}],
+            'endpoints': [{
+                'addresses': ['10.42.1.11'],
+                'conditions': {'ready': True},
+            }],
+        }]}).encode()
+        manage.check_wizard_service(kube)
+        kube.get.assert_called_with('service', 'wizard-of-wor-service')
+
+    def test_wizard_check_refuses_missing_or_wrong_service(self):
+        kube = Mock()
+        kube.get.return_value = None
+        with self.assertRaises(Failure):
+            manage.check_wizard_service(kube)
+        kube.get.return_value = {'spec': {'ports': [{'port': 8099}]}}
+        with self.assertRaises(Failure):
+            manage.check_wizard_service(kube)
+
+    def test_wizard_check_refuses_unready_or_wrong_endpoint(self):
+        kube = Mock()
+        kube.get.return_value = {'spec': {'ports': [
+            {'port': 8107, 'protocol': 'TCP'},
+        ]}}
+        for port, is_ready in ((8107, False), (9999, True)):
+            kube.call.return_value = json.dumps({'items': [{
+                'ports': [{'port': port, 'protocol': 'TCP'}],
+                'endpoints': [{
+                    'addresses': ['10.42.1.11'],
+                    'conditions': {'ready': is_ready},
+                }],
+            }]}).encode()
+            with self.assertRaises(Failure):
+                manage.check_wizard_service(kube)
