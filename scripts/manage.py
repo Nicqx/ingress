@@ -23,6 +23,10 @@ MUNKAIDO_INGRESS = 'munkaido-ingress'
 MUNKAIDO_SERVICE = 'munkaido-nyilvantarto'
 MUNKAIDO_PATH = '/munkaido'
 MUNKAIDO_STRIP = 'munkaido-strip-prefix'
+WIZARD_INGRESS = 'wizard-of-wor-ingress'
+WIZARD_SERVICE = 'wizard-of-wor-service'
+WIZARD_PATH = '/wizard-of-wor'
+WIZARD_PORT = 8107
 ROUTES = {
     MAIN: [('/', 'landing-page-service', 80), ('/sumplete', 'sum-local-service', 8080),
            ('/tic-tac-toe', 'ultimate-tic-tac-toe-service', 8090), ('/chess', 'chess-game-service', 8099)],
@@ -34,7 +38,7 @@ ROUTES = {
 ALLOWED = ({('Ingress', name) for name in ROUTES}
            | {('Ingress', HTTP_REDIRECT), ('Middleware', STRIP), ('Middleware', REDIRECT),
               ('Ingress', GRANDMA_INGRESS), ('Ingress', MUNKAIDO_INGRESS),
-              ('Middleware', MUNKAIDO_STRIP)})
+              ('Middleware', MUNKAIDO_STRIP), ('Ingress', WIZARD_INGRESS)})
 MIDDLEWARE_ANNOTATION = 'traefik.ingress.kubernetes.io/router.middlewares'
 CERT_MANAGER_VERSION = 'v1.21.2'
 CERT_MANAGER_SHA256 = 'e03b668ec8675214af6b0a671699d088f2601fa3878e0dbe1b41d3feafd1879f'
@@ -338,6 +342,74 @@ def munkaido_resources(settings, existing_ingresses=None, group='traefik.io'):
     }
     return label([middleware, ingress], 'ingress')
 
+
+def check_wizard_service(kube):
+    """Publish only after the real Kubernetes Service has a Ready endpoint."""
+    service = kube.get('service', WIZARD_SERVICE)
+    if not service:
+        raise Failure('Hianyzik a wizard-of-wor-service. Elobb telepitsd a Wizard of Wor k3s szolgaltatast.')
+    ports = service.get('spec', {}).get('ports', [])
+    if not any(
+        isinstance(port, dict) and int(port.get('port', 0)) == WIZARD_PORT
+        and port.get('protocol', 'TCP') == 'TCP'
+        for port in ports
+    ):
+        raise Failure('A wizard-of-wor-service nem a vart 8107/TCP porton mukodik.')
+    raw = kube.call(
+        'get', 'endpointslice',
+        '-l', f'kubernetes.io/service-name={WIZARD_SERVICE}',
+        '-n', 'default', '-o', 'json',
+    )
+    data = json.loads(raw)
+    ready = any(
+        endpoint.get('addresses')
+        and endpoint.get('conditions', {}).get('ready', True) is not False
+        for item in data.get('items', [])
+        for endpoint in item.get('endpoints', [])
+        if any(
+            port.get('port') == WIZARD_PORT and port.get('protocol', 'TCP') == 'TCP'
+            for port in item.get('ports', [])
+        )
+    )
+    if not ready:
+        raise Failure('Nincs Ready EndpointSlice a wizard-of-wor-service 8107/TCP portja mogott.')
+
+
+def wizard_resources(settings, existing_ingresses=None):
+    """Separate HTTPS route; no StripPrefix and no changes to existing games."""
+    existing_ingresses = existing_ingresses or []
+    host = settings['hostname']
+    for obj in existing_ingresses:
+        for rule in obj.get('spec', {}).get('rules', []):
+            if rule.get('host') != host:
+                continue
+            for path in rule.get('http', {}).get('paths', []):
+                if path_id(path.get('path', '/')) != WIZARD_PATH:
+                    continue
+                if obj.get('metadata', {}).get('name') != WIZARD_INGRESS:
+                    raise Failure(
+                        f"Utkozo ingress: {obj['metadata']['name']} ({WIZARD_PATH}); nincs feluliras."
+                    )
+    return label([{
+        'apiVersion': 'networking.k8s.io/v1',
+        'kind': 'Ingress',
+        'metadata': {
+            'name': WIZARD_INGRESS,
+            'annotations': {
+                'traefik.ingress.kubernetes.io/router.entrypoints': 'websecure',
+                'traefik.ingress.kubernetes.io/router.tls': 'true',
+            },
+        },
+        'spec': {
+            'ingressClassName': 'traefik',
+            'rules': [{'host': host, 'http': {'paths': [
+                backend(WIZARD_PATH, WIZARD_SERVICE, WIZARD_PORT),
+            ]}}],
+            'tls': [{'hosts': [host], 'secretName': settings['tls_secret']}],
+        },
+    }], 'ingress')
+
+
 def check_tls(secret, host):
     try:
         if secret['type'] != 'kubernetes.io/tls': raise ValueError()
@@ -451,13 +523,13 @@ def enable_renewal(kube, settings, dry_run):
 
 def main():
     p = parser('Traefik utvonalak es TLS koltoztetes',
-               ['update', 'rollback', 'render', 'diagnose', 'export-tls', 'import-tls', 'install-cert-manager', 'enable-renewal', 'publish-grandma', 'publish-munkaido'])
+               ['update', 'rollback', 'render', 'diagnose', 'export-tls', 'import-tls', 'install-cert-manager', 'enable-renewal', 'publish-grandma', 'publish-munkaido', 'publish-wizard'])
     p.add_argument('--file')
     args = p.parse_args()
     settings = config()
     if args.command == 'render': print(json.dumps(render(settings), indent=2)); return
     if args.command in {'export-tls', 'import-tls'} and not args.file: p.error('--file szukseges')
-    if args.dry_run and args.command not in {'update', 'rollback', 'import-tls', 'enable-renewal', 'publish-grandma', 'publish-munkaido'}: p.error('Ehhez a parancshoz nincs dry-run')
+    if args.dry_run and args.command not in {'update', 'rollback', 'import-tls', 'enable-renewal', 'publish-grandma', 'publish-munkaido', 'publish-wizard'}: p.error('Ehhez a parancshoz nincs dry-run')
     kube = Kube(args.target, args.context)
     kube.verify(require_ready=args.command != 'diagnose')
     if args.command == 'diagnose': diagnose(kube); return
@@ -499,6 +571,15 @@ def main():
                 kube.get('ingresses')['items'],
                 group,
             )
+            if not args.dry_run:
+                snapshot(kube, items)
+            kube.apply(items, ALLOWED, dry_run=args.dry_run)
+        elif args.command == 'publish-wizard':
+            if kube.target != 'nuc':
+                raise Failure('A Wizard of Wor csak a NUC k3s clustererol publikalhato.')
+            check_tls(kube.get('secret', settings['tls_secret']), settings['hostname'])
+            check_wizard_service(kube)
+            items = wizard_resources(settings, kube.get('ingresses')['items'])
             if not args.dry_run:
                 snapshot(kube, items)
             kube.apply(items, ALLOWED, dry_run=args.dry_run)
