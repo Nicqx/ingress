@@ -390,6 +390,25 @@ def wizard_resources(settings, existing_ingresses=None):
                     raise Failure(
                         f"Utkozo ingress: {obj['metadata']['name']} ({WIZARD_PATH}); nincs feluliras."
                     )
+    own = [obj for obj in existing_ingresses
+           if obj.get('metadata', {}).get('name') == WIZARD_INGRESS]
+    if len(own) > 1:
+        raise Failure('Tobb azonos nevu Wizard ingress; nincs feluliras.')
+    if own:
+        previous = own[0]
+        rules = previous.get('spec', {}).get('rules', [])
+        paths = [p for rule in rules if rule.get('host') == host
+                 for p in rule.get('http', {}).get('paths', [])]
+        if (previous.get('spec', {}).get('ingressClassName', 'traefik') != 'traefik'
+                or len(rules) != 1 or len(paths) != 1
+                or path_id(paths[0].get('path', '')) != WIZARD_PATH
+                or paths[0].get('backend', {}).get('service', {}).get('name') != WIZARD_SERVICE
+                or paths[0].get('backend', {}).get('service', {}).get('port', {}).get('number') != WIZARD_PORT
+                or previous.get('spec', {}).get('tls') != [{
+                    'hosts': [host], 'secretName': settings['tls_secret']
+                }]
+                or MIDDLEWARE_ANNOTATION in previous.get('metadata', {}).get('annotations', {})):
+            raise Failure('A letezo Wizard ingress eltero beallitasu; nincs automatikus feluliras.')
     return label([{
         'apiVersion': 'networking.k8s.io/v1',
         'kind': 'Ingress',
