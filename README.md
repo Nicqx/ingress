@@ -228,3 +228,34 @@ publikus útvonalon maradnak. Új WAN portot nem kell nyitni; a sikeres
 ellenőrzés után a régi 1985-ös router porttovábbítás megszüntethető.
 
 
+
+## Wizard of Wor – kulon NUC ingress (tavoli teszthez)
+
+Az uj jatek a `Nicqx/wizard-of-wor` repo `feat/server-c64-mvp` agan keszul, egyelore kulon Docker Compose-ban fut. **A Docker Compose `127.0.0.1:8107` portja nem Kubernetes Service**; az ingress telepitese elott a jatekot a k3s-be is telepiteni kell.
+
+1. A Wizard repo-ban tedd a sajat, jogszeruen hasznalhato `local-roms/game.d64` fajlt a megfelelo helyre.
+2. Az uj Wizard k3s telepitoja: `bash scripts/update.sh --dry-run`, majd a sikeres ellenorzes utan `bash scripts/update.sh --apply`.
+3. Ellenorizd: `kubectl -n default get deployment/wizard-of-wor service/wizard-of-wor-service`; `kubectl -n default get endpointslice -l kubernetes.io/service-name=wizard-of-wor-service`.
+
+Az ingress repo `feat/publish-wizard-of-wor` fejlesztoi agakbol:
+
+```bash
+cd ~/codes/ingress
+git fetch origin
+git switch feat/publish-wizard-of-wor
+
+KUBECTL='sudo k3s kubectl' \
+  python3 scripts/manage.py publish-wizard --target nuc --dry-run
+
+KUBECTL='sudo k3s kubectl' \
+  python3 scripts/manage.py publish-wizard --target nuc
+```
+
+A parancs a `pmqxyz.hopto.org` TLS cert, a Ready `wizard-of-wor-service:8107` EndpointSlice es az utvonaltulajdonlas ellenorzese utan **csak** a `wizard-of-wor-ingress` eroforrast alkalmazza. Egyetlen `/wizard-of-wor` Prefix utvonalat ad hozza, **prefixlevagas nelkul**, mert az alkalmazas `/wizard-of-wor/api/...` es WebSocket vegpontokat hasznal. A mas jatekok meglevo ingress szabalyaihoz nem nyul.
+
+Tavoli URL sikeres publish utan:
+`https://pmqxyz.hopto.org/wizard-of-wor/`
+
+A Windows gepnek, telefonnak nem kell a NUC-cel egy LAN-on lennie. Nincs uj router port: a meglevo TCP 443/TLS Traefik belepesi pontot hasznalja.
+
+Az eredeti lemezkep nem kerul a GitHubra, a Kubernetesbe a helyi fajlbol Secretkent telepitjuk. A publikus URL csak tesztelesre kesz; a jatek tenyleges betolteset es a ket jatekos vezérlését kulon ellenorizni kell. A jatekot egyelore **nem tesszuk a landing oldalra**. Visszaallitasnal a publish soran kiirt `~/.local/state/nicqx-infra/nuc/ingress/` snapshot utvonalat hasznald a szokasos `scripts/manage.py rollback` parancshoz; a visszaallitas nem torli automatikusan az elso alkalommal letrehozott ingress eroforrast.
