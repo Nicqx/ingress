@@ -274,6 +274,17 @@ class WizardPublicationTests(unittest.TestCase):
         with self.assertRaises(Failure):
             manage.wizard_resources(CONFIG, [foreign])
 
+    def test_wizard_refuses_changed_existing_own_route(self):
+        original = manage.wizard_resources(CONFIG)[0]
+        changed = copy.deepcopy(original)
+        changed['spec']['rules'][0]['http']['paths'][0]['backend']['service']['name'] = 'other-service'
+        with self.assertRaises(Failure):
+            manage.wizard_resources(CONFIG, [changed])
+        changed = copy.deepcopy(original)
+        changed['metadata']['annotations'][manage.MIDDLEWARE_ANNOTATION] = 'foreign-strip'
+        with self.assertRaises(Failure):
+            manage.wizard_resources(CONFIG, [changed])
+
     def test_wizard_check_accepts_ready_service(self):
         kube = Mock()
         kube.get.return_value = {'spec': {'ports': [
