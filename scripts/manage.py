@@ -25,7 +25,8 @@ MUNKAIDO_PATH = '/munkaido'
 MUNKAIDO_STRIP = 'munkaido-strip-prefix'
 ROUTES = {
     MAIN: [('/', 'landing-page-service', 80), ('/sumplete', 'sum-local-service', 8080),
-           ('/tic-tac-toe', 'ultimate-tic-tac-toe-service', 8090), ('/chess', 'chess-game-service', 8099)],
+           ('/tic-tac-toe', 'ultimate-tic-tac-toe-service', 8090), ('/chess', 'chess-game-service', 8099),
+           ('/mirror', 'mirror-service', 8080)],
     SUDOKU: [('/sudoku', 'sudoku-app', 9097)],
     'bakos-game-ingress': [('/bakos', 'bakos-game-service', 8105)],
     'maffia-game-ingress': [('/maffia', 'maffia-game-service', 8098)],
