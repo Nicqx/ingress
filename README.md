@@ -8,6 +8,7 @@ Egyetlen kezelt útvonal tartozik minden játékhoz, a Pi jelenlegi erőforrásn
 | `home-games-ingress` | `/sumplete` | `sum-local-service:8080` |
 | `home-games-ingress` | `/tic-tac-toe` | `ultimate-tic-tac-toe-service:8090` |
 | `home-games-ingress` | `/chess` | `chess-game-service:8099` |
+| `home-games-ingress` | `/mirror` | `mirror-service:8080` |
 | `home-games-sudoku-ingress` | `/sudoku` | `sudoku-app:9097` |
 | `bakos-game-ingress` | `/bakos` | `bakos-game-service:8105` |
 | `maffia-game-ingress` | `/maffia` | `maffia-game-service:8098` |
