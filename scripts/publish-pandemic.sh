@@ -54,7 +54,17 @@ for ing in json.load(sys.stdin).get("items", []):
 '
 
 "${KUBE[@]}" apply -f k8s/pandemic-ingress.yaml
+# A previous annotation is not necessarily removed if client-side apply
+# does not own it. Never report a successful switch without checking it.
+MIDDLEWARE=$("${KUBE[@]}" get ingress pandemic-game-ingress -n "$NS" \
+  -o 'go-template={{index .metadata.annotations "traefik.ingress.kubernetes.io/router.middlewares"}}')
+if [[ -n "$MIDDLEWARE" && "$MIDDLEWARE" != "<no value>" ]]; then
+  echo "A régi middleware még a route-on van: $MIDDLEWARE" >&2
+  echo "Kézi egyeztetés szükséges; az annotációt nem töröljük vakon." >&2
+  exit 1
+fi
 "${KUBE[@]}" get ingress pandemic-game-ingress -n "$NS"
-echo "A régi BasicAuth middleware-annotáció lekerült a Pandemic útvonalról."
+echo "APP INVITE GATE PASS – a backend 401-es próbái sikeresek."
+echo "A régi BasicAuth middleware-annotáció nincs a Pandemic útvonalon."
 echo "A middleware-erőforrás és a Secret változatlan: visszaállíthatók."
 echo "Most teszteld a meghívólinkes belépést mindkét böngészőből!"
