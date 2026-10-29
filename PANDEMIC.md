@@ -1,64 +1,61 @@
-# Pandemic – védett HTTPS útvonal
+# Pandemic: egyszeri meghívólink, nincs felhasználónév/jelszó
 
-**Állapot:** előkészített külön PR. Az éles útvonal egyelőre változatlan.
+Ez az ág a meglévő pandemic-game-ingress útvonalról a **régi BasicAuth
+middleware hivatkozását** leveszi, de **csak akkor**, ha a Pandemic backend
+már meghívólinkes, Redisben ellenőrzött munkamenet-kaput használ.
+A régi BasicAuth Kubernetes Secret és Middleware megmarad, hogy szükség
+esetén gyorsan visszaállítható legyen.
 
-A Pandemic játék a belső pandemic-service:8111 Service mögött fut.
-A k8s/pandemic-ingress.yaml két erőforrást hoz létre:
-- Middleware/pandemic-auth: HTTP BasicAuth, bcrypt, removeHeader true
-- Ingress/pandemic-game-ingress: pmqxyz.hopto.org/pandemic, HTTPS, my-tls-secret
+## Telepítési sorrend – kötelező
 
-A repo privát volta nem védi a publikus URL-t. A BasicAuth az
-internet felől elérhető útvonalat jelszóval védi. Csak LAN-only
-használathoz ne telepítsd az ingress-t, használj helyi port-forwardot.
+1. A Pandemic repo feature/invite-link-access ágán 78/78 teszt PASS.
+2. A Pandemic `bash scripts/deploy-nuc.sh --apply` telepítése sikeres.
+3. Két személyes meghívólink kiadása a podból (lásd a Pandemic repo
+   docs/PASSWORDLESS_INVITES.md leírását).
+4. Ingress repo tesztek sikeresek.
+5. `bash scripts/publish-pandemic.sh --apply` futtatása.
+6. Két böngészős belépési és WebSocket-próba sikeres.
+7. Csak ezután aktiválható a Pandemic csempe a landing repóban.
 
-## Előfeltételek
-
-1. Pandemic Redis-alapú k3s Deployment Ready.
-2. Kétböngészős helyi teszt és restart utáni visszacsatlakozás PASS.
-3. A TLS tanúsítvány érvényes.
-4. A BasicAuth Secret kizárólag a NUC-on, kézzel létrehozva.
-
-## BasicAuth Secret – egyszeri létrehozás a NUC-on
-
-Az apache2-utils csomag htpasswd parancsa interaktív jelszót kér.
-A jelszót ne parancssori argumentumként add meg.
-
-    sudo apt install apache2-utils
-    umask 077
-    AUTHFILE=$(mktemp)
-    trap 'rm -f "$AUTHFILE"' EXIT
-    htpasswd -nB pandemic > "$AUTHFILE"
-    sudo k3s kubectl create secret generic pandemic-basic-auth --from-file=users="$AUTHFILE" -n default
-    rm -f "$AUTHFILE"
-    trap - EXIT
-
-Ha a Secret már létezik, a create parancs szándékosan hibázik.
-
-## Aktiválás
+## Külön előnézet és élesítés
 
     cd ~/codes/ingress
     git fetch origin
-    git switch --track origin/feature/pandemic-basic-auth-route
+    git switch --track origin/feature/pandemic-invite-switch
+    python3 -m unittest discover -s tests -v
     bash scripts/publish-pandemic.sh
     bash scripts/publish-pandemic.sh --apply
 
-A script ellenőrzi a Secretet, a Deploymentet, a 8111-es service-portot
-és az ütköző útvonalakat. Nem módosít más ingress-erőforrásokat.
+A script közvetlenül a Pandemic podban vizsgálja meg:
 
-## Ellenőrzések
+- Az invite mód tényleg be van kapcsolva.
+- A publikus HTTPS-origin megfelelő.
+- A Redis healthz válasza OK.
+- A védelem nélküli /pandemic/, /pandemic/static/app.js és
+  /pandemic/api/access/whoami kérések **401** választ kapnak.
 
-- Hitelesítés nélkül /pandemic/ HTTPS válasza 401.
-- BasicAuth pandemic felhasználóval a böngésző megnyitja az oldalt.
-- Mindkét böngészőben elérhető az élő WebSocket kapcsolat.
-- A második játékos csatlakozása frissíti az első játékos lobbyját.
-- A játékostokent az X-Pandemic-Token fejléc kezeli, nem az Authorization.
+Ha bármelyik ellenőrzés sikertelen, a már működő Traefik BasicAuth
+változatlan marad. A script más Ingress objektumát nem módosítja.
 
-Amíg a WS kétszemélyes teszt nem PASS, a landing csempét ne aktiváld.
+## Próba
 
-## Visszavonás
+- A névtelen /pandemic/ válasza 401 (már a Pandemic backendtől).
+- A személyes meghívó URL felhasználónév/jelszó nélkül nyit.
+- Az egyszer használatos link Belépés gombja 90 napos cookie-t ad.
+- Újratöltéskor nincs új bejelentkezés.
+- Két külön böngészőben működik az élő WebSocket és a játék.
 
-    sudo k3s kubectl delete ingress pandemic-game-ingress -n default
-    sudo k3s kubectl delete middleware pandemic-auth -n default
+## Visszaállítás az előző BasicAuth-ra
 
-Az auth Secret, a Service és a Redis-adatok megmaradnak.
-Csak a Secret törlésével nem ajánlott visszavonni a route-ot.
+    sudo k3s kubectl annotate ingress/pandemic-game-ingress -n default 'traefik.ingress.kubernetes.io/router.middlewares=default-pandemic-auth@kubernetescrd' --overwrite
+
+Ez nem módosítja a játékállapotot, a redis-t vagy más alkalmazást.
+A régi Secretet és Middleware-t ne töröld a kétböngészős próba előtt.
+
+## Biztonsági megjegyzés
+
+A cookie/token a belépési hitelesítés; annak ellopása belépést tesz
+lehetővé az adott eszközön. Ezért csak saját vagy megbízható eszközről
+használjátok, és elveszett eszköz esetén a Pandemic
+`python -m pandemic.access revoke --label ...` parancsával
+vond vissza a személyes munkameneteket.

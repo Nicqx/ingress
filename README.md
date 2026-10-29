@@ -1,6 +1,6 @@
 # Traefik ingress – Pi5 és NUC
 
-> A Pandemic külön, BasicAuth-védett ingress-e **nem** része az általános ROUTES frissítésnek. Az aktiválás külön, ellenőrzött lépés: [PANDEMIC.md](PANDEMIC.md). Csak a belső Pandemic Service/Redis és az auth Secret ellenőrzése után alkalmazandó.
+> A Pandemic külön ingress-e **nem** része az általános ROUTES frissítésnek. A `feature/pandemic-invite-switch` ág a régi BasicAuth helyett a Pandemic saját, Redis-backed meghívólinkes belépését használja. Csak a backend 401-es ellenőrzése után élesíthető. Részletek: [PANDEMIC.md](PANDEMIC.md).
 
 Egyetlen kezelt útvonal tartozik minden játékhoz, a Pi jelenlegi erőforrásneveivel. Az update a meglévő ingressbe csak az ismert játékútvonalakat illeszti be; egyéb hostokat, útvonalakat és annotációkat megőriz. Ha egy ismert útvonal másik szolgáltatásé, duplikált ingress ütközik vele vagy közös szabály globális átírása kellene, módosítás nélkül megáll. Régi ingress-nginx/Traefik controllert nem töröl és nem konfigurál át.
 
