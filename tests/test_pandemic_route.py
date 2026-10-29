@@ -27,6 +27,9 @@ class PandemicIngressTests(unittest.TestCase):
         self.assertIn("APP INVITE GATE PASS", source)
         self.assertIn("e.code == 401", source)
         self.assertIn("apply -f k8s/pandemic-ingress.yaml", source)
+        self.assertIn('router.middlewares', source)
+        self.assertIn('MIDDLEWARE=', source)
+        self.assertIn('Kézi egyeztetés szükséges', source)
 
 
 if __name__ == "__main__":
